@@ -11,6 +11,7 @@ Modification Log     :
 * -------------------------------------------------------------------------------------------------  
 * Naveen K Udatha      7/7/2016               Created.
 * Sagar M              12/8/2016              Added OBF Trigger
+* Balaram Nair         5/31/2017              Added OpportunityTaskAssignments logic 
 ***************************************************************************************************/
 
 trigger AP_EI_OpportunityTrigger on Opportunity (before insert,before update, after update, after delete, after undelete, before delete, after insert) {
@@ -60,6 +61,8 @@ trigger AP_EI_OpportunityTrigger on Opportunity (before insert,before update, af
             if(Trigger.isUndelete){
                AP_EI_OpportunityTriggerHelper.afterUnDeleteTriggerHandler(null, trigger.new,null);
             }
+             OpportunityTaskAssignments.createTask (trigger.new, trigger.oldMap);
         }
+            OpportunityTaskAssignments.createTask (trigger.new, trigger.oldMap);
     }
    }
