@@ -1,0 +1,156 @@
+/**************************************************************************************************   
+Apex Controller Name :  AP_EI_DeemedCustomOLIDetailCntrl
+Version              :  1.0                                                                          
+Created Date         :  June 23, 2016                                                               
+Function             :  Controller for AP_EI_DeemedCustomOLI_Detail page
+Description          :  This is an extension controller for OLI custom detail page.
+Story                :                                                                               
+Work Task            :                                                                               
+Modification Log     :                                                                               
+*--------------------------------------------------------------------------------------------------  
+* Developer                   Date                   Description                                     
+* -------------------------------------------------------------------------------------------------  
+* Aarti Jindal               8/30/2016              First Iteration            
+***************************************************************************************************/
+
+public with sharing class AP_EI_DeemedCustomOLIDetailCntrl{
+    public final Set<String> PROFILES_ALLOWD_EDIT = new Set<String>{'System Administrator','Technology Enablement'};
+    public OpportunityLineItem oli {get;set;}
+    public List<EI_Deemed_Sections__c> sections {get;set;}
+    public string secVar{get;set;}
+    public Map<String,List<Schema.FieldSetMember>> fieldSetNameAndMembers {get;set;}
+    public ApexPages.StandardController sController;
+    public Boolean isLocked{get;set;}
+    public String allNameString{get;set;} 
+    Map<String,AP_EI_ReadOnly_Fields__c> mapOfReadOnlyFields = AP_EI_ReadOnly_Fields__c.getAll();
+    public List<String> readOnlyApiNamesDeemed = new List<String>();
+    public List<String> readOnlyApiNamesCustom = new List<String>();
+    
+    /**
+    * @Description: Constructor of class
+    * @Parameter: ApexPages.StandardController
+    * @Return: None
+    * @USage: Used to filter out sections/fields to be displayed based on measure type code
+    **/
+    public AP_EI_DeemedCustomOLIDetailCntrl(ApexPages.StandardController controller) {
+        sController = controller;
+        Id profileId = Userinfo.getProfileId();
+        if(!mapOfReadOnlyFields.isEmpty()){
+            for(String apiName:mapOfReadOnlyFields.keySet()){
+                if(mapOfReadOnlyFields.get(apiName).Measure_Type_Code__c == 'Deemed' || mapOfReadOnlyFields.get(apiName).Measure_Type_Code__c == 'Both'){
+                    readOnlyApiNamesDeemed.add(apiName);
+                }
+                if(mapOfReadOnlyFields.get(apiName).Measure_Type_Code__c == 'Custom' || mapOfReadOnlyFields.get(apiName).Measure_Type_Code__c == 'Both'){
+                    readOnlyApiNamesCustom.add(apiName);
+                }   
+            }
+        }   
+        allNameString ='';
+        oli = (OpportunityLineItem)controller.getRecord();
+        String SobjectApiName = 'OpportunityLineItem';
+        Map<String, Schema.SObjectType> schemaMap = Schema.getGlobalDescribe();
+        Map<String, Schema.SObjectField> fieldMap = schemaMap.get(SobjectApiName).getDescribe().fields.getMap();
+        String commaSepratedFields = '';
+        String query;
+        Map<ID,Schema.RecordTypeInfo> oppRecTypeMap = Opportunity.sObjectType.getDescribe().getRecordTypeInfosById();
+        List<AP_EI_Locked_Record_Types__c> lockedRecNames = AP_EI_Locked_Record_Types__c.getall().values();
+        for(String fieldName : fieldMap.keyset()){
+            if(commaSepratedFields == null || commaSepratedFields == ''){
+                commaSepratedFields = fieldName;
+            }else{
+                commaSepratedFields = commaSepratedFields + ', ' + fieldName;
+            }
+        }
+        query = 'select ' + commaSepratedFields + ',Opportunity.Name,Product2.meas_Type_Code_EI__c,Opportunity.RecordTypeId,PriceBookEntry.Product2Id from ' + SobjectApiName + ' Where Id =\''+oli.Id+'\'';
+        String profileName=[Select Id,Name from Profile where Id=:profileId].Name;
+        oli = Database.query(query);
+        for(AP_EI_Locked_Record_Types__c recName : lockedRecNames ){
+            if(oppRecTypeMap.get(oli.Opportunity.RecordTypeId).getName().containsIgnoreCase(recName.Name) && !PROFILES_ALLOWD_EDIT.contains(profileName)){
+                isLocked = true;
+                break;    
+            }
+        }
+        fieldSetNameAndMembers = new Map<String,List<Schema.FieldSetMember>>();
+        if(oli.Product2.meas_Type_Code_EI__c == 'Deemed'){
+            secVar = 'D';
+            allNameString = string.join(readOnlyApiNamesDeemed,',');
+            sections = [SELECT id,Name,Order_Number__c,Field_Set_Name__c,Type__c from EI_Deemed_Sections__c where Type__c='Deemed' OR Type__c LIKE 'Both%' ORDER BY Order_Number__c];
+        }
+        else{
+            if(oli.Product2.meas_Type_Code_EI__c == 'Custom'){
+                secVar = 'C';
+                allNameString = string.join(readOnlyApiNamesCustom,',');
+                sections = [SELECT id,Name,Order_Number__c,Field_Set_Name__c, Type__c from EI_Deemed_Sections__c where Type__c='Custom' OR Type__c LIKE 'Both%' ORDER BY Order_Number__c];
+            }
+        }
+        if(sections!=null){
+            for(EI_Deemed_Sections__c sec:sections){
+               Schema.FieldSet fs1 = Schema.SObjectType.OpportunityLineItem.fieldSets.getMap().get(sec.Field_Set_Name__c);
+               fieldSetNameAndMembers.put(sec.Field_Set_Name__c,fs1.getFields());   
+            }
+        }    
+    }
+    
+     /**
+    * @Description: Function called on click of Edit button
+    * @Parameter: None
+    * @Return: PageReference
+    * @USage: 
+    **/
+    public PageReference EditAction() {
+        PageReference retPr = new PageReference('/apex/AP_EI_DeemedCustomOLI_Edit?Id='+oli.Id);
+        retPr.setRedirect(true);
+        return retPr;
+    }
+    
+    /**
+    * @Description: Function called on click of Delete button
+    * @Parameter: None
+    * @Return: PageReference
+    * @USage: 
+    **/
+    public PageReference DeleteAction() {
+        try{
+            Id pId = oli.OpportunityId;
+            delete oli;
+            PageReference pr = new PageReference('/'+pId);
+            return pr;
+        }catch(Exception ex){
+            EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_DeemedCustomOLIEditCntrl', ex));
+            ApexPages.addMessages(ex);
+            return null;  
+        }
+    }
+    
+    /**
+    * @Description: Function called on click of Save button
+    * @Parameter: None
+    * @Return: PageReference
+    * @USage: 
+    **/
+    public PageReference quicksave() {
+        try{
+            update oli;
+        }catch(Exception ex){
+            EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_DeemedCustomOLIEditCntrl', ex));
+            ApexPages.addMessages(ex);
+            return null;  
+        }    
+        PageReference retPr = new PageReference('/apex/AP_EI_DeemedCustomOLI_Detail?Id='+oli.Id);
+        retPr.setRedirect(true);
+        return retPr;
+    }
+    
+    /**
+    * @Description: Function called on click of Cancel button
+    * @Parameter: None
+    * @Return: PageReference
+    * @USage: 
+    **/
+    public PageReference quickcancel(){
+        PageReference retPr = new PageReference('/apex/AP_EI_DeemedCustomOLI_Detail?Id='+oli.Id);
+        retPr.setRedirect(true);
+        return retPr;
+    }
+
+}
