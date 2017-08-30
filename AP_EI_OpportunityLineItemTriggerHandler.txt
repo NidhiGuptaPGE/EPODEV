@@ -36,7 +36,8 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
     public static final String DD_NO = 'No';
     public static final Set<String> progSuppType = new Set<String>{'Distributor Program', '3P', 'GP'};
     public static final Set<String> progProcessWF = new Set<String>{'Deemed', 'Custom Lite'};
-    
+    public static final Set<String> recordtypesetESA = new Set<String> {'ESA A/C Tune Up', 'ESA A/C Tune Up Locked','ESA Application','ESA Large Appliance','ESA R&R','ESA R&R Locked','ESA Refrigerator Leveraging','  ESA Refrigerator Leveraging Locked','ESA Weatherization','ESA Weatherization Locked'}; 
+     public static final Set<String> recordTypeNameSetESA = new Set<String> { 'ESA_AC_Tune_Up','ESA_A_C_Tune_Up_Locked','PGE_ESA_Application_Parent_EI','ESA_large_Appliance','ESA_R_R','ESA_R_R_Locked','ESA_Refrigerator_Leveraging','ESA_Refrigerator_Leveraging_Locked','ESA_Weatherization','ESA_Weatherization_Locked'};
     
     /**
     * @Description: static method for before insert
@@ -72,7 +73,7 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
                 if(oli.Site_Service_Agreement_EI__c != null && oli.Site_Bldg_Type_EI__c == null) {
                     siteBuildingTypeList.add(oli);
                 }
-                      
+                
                 // check whether the site address fields on project measure exist 
                 if(oli.Site_Address_EI__c   != null ||
                    oli.Site_City_EI__c      != null ||
@@ -143,14 +144,52 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
             EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_OpportunityLineItemTriggerHandler', e));
         }
     }
+    /**
+    * @Description: Static method for Handle After Insert
+    * @Parameter:
+    * @Return: None
+    * @Usage: 
+    **/   
     
-    
-                
-    
+    public static void handleAfterInsert(Map<Id, OpportunityLineItem> newMap) {
 
-            
-          
-       
+      try {
+                
+
+              //Added by sambit on 7/19/2017 for STY -1107 : NGAT Required logic
+                list<opportunity> updateopty=new list<opportunity>();
+                Set<Id> opptyIdSet = new Set<Id>(); 
+                map<id,list<OpportunityLineItem>> optyoptylineMap=new map<id,list<OpportunityLineItem>>();
+                for(OpportunityLineItem oli:[Select id,opportunityid from OpportunityLineItem where id IN:newMap.keyset() and Project_Measure_Status_EI__c NOT IN:projectMeasureStatusSet]){
+                    opptyidset.add(oli.opportunityid);
+                }
+                list<opportunity> opplist=new list<opportunity>([Select id,ESA_SubCon_NGAT_Required_EI__c,Program_EI__r.Processing_Workflow_EI__c,(select id,product2.ESA_Infiltration__c,Project_Measure_Status_EI__c from OpportunityLineItems) from opportunity where id IN:opptyidset]);
+                for(opportunity op:opplist)
+                    optyoptylineMap.put(op.id,new list<OpportunityLineItem>(op.OpportunityLineItems));
+                for(opportunity op:opplist)
+                {
+                    if(optyoptylineMap.containskey(op.id) && op.Program_EI__r.Processing_Workflow_EI__c!='Repair and Replacement'){
+                        for(OpportunityLineItem ol:optyoptylineMap.get(op.id)){
+                            if(ol.product2.ESA_Infiltration__c==true && !projectMeasureStatusSet.contains(ol.Project_Measure_Status_EI__c)){
+                                op.ESA_SubCon_NGAT_Required_EI__c=true;
+                                break;
+                            }
+                            else 
+                                op.ESA_SubCon_NGAT_Required_EI__c=false;
+                        }
+                        updateopty.add(op);
+                    }
+                    
+                }
+                update updateopty;
+             }
+             catch(Exception e) {
+            EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_OpportunityLineItemTriggerHandler', e));
+        }
+
+             
+    }
+    
     
     /**
     * @Description: Static method for Handle Before Update
@@ -230,6 +269,9 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
                 if(oliBTList.size() > 0) {
                     populateBuildingType(oliBTList);
                 }
+                system.debug('newmap2 is '+newMap);
+                ESAProjectUtility.DDReviewed(newMap,oldMap);
+                ESAProjectUtility.CapReviewed(newMap,oldMap);
                 
             } // recursion variable
         } catch(Exception e) {
@@ -347,7 +389,8 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
                         (oli.F_Therm_Savings_EI__c         != oldMap.get(oli.id).F_Therm_Savings_EI__c         && oli.F_Therm_Savings_EI__c <> null)         ||
                         (oli.F_Unit_of_Equipment_Qty_EI__c != oldMap.get(oli.id).F_Unit_of_Equipment_Qty_EI__c && oli.F_Unit_of_Equipment_Qty_EI__c <> null) ||
                         (oli.F_Unit_of_Measure_Qty_EI__c   != oldMap.get(oli.id).F_Unit_of_Measure_Qty_EI__c   && oli.F_Unit_of_Measure_Qty_EI__c <> null))  && 
-                        !projectStatusSet.contains(oppMap.get(oli.OpportunityId).StageName)) {
+                        !projectStatusSet.contains(oppMap.get(oli.OpportunityId).StageName) &&
+                        !recordTypeNameSetESA.contains(oppMap.get(oli.OpportunityId).RecordType.DeveloperName)) {
                         kickerCascadeSavingsList.add(oli);
                     }
                 
@@ -424,6 +467,32 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
                     executeOLITrigger = false; 
                     update sbdOLIList;
                 }
+                
+               /* //Added by sambit on 7/19/2017 for STY -1107 : NGAT Required logic
+                list<opportunity> updateopty=new list<opportunity>();
+                map<id,list<OpportunityLineItem>> optyoptylineMap=new map<id,list<OpportunityLineItem>>();
+                for(OpportunityLineItem oli:[Select id,opportunityid from OpportunityLineItem where id IN:newMap.keyset() and Project_Measure_Status_EI__c NOT IN:projectMeasureStatusSet]){
+                    opptyidset.add(oli.opportunityid);
+                }
+                list<opportunity> opplist=new list<opportunity>([Select id,ESA_SubCon_NGAT_Required_EI__c,Program_EI__r.Processing_Workflow_EI__c,(select id,product2.ESA_Infiltration__c,Project_Measure_Status_EI__c from OpportunityLineItems) from opportunity where id IN:opptyidset]);
+                for(opportunity op:opplist)
+                    optyoptylineMap.put(op.id,new list<OpportunityLineItem>(op.OpportunityLineItems));
+                for(opportunity op:opplist)
+                {
+                    if(optyoptylineMap.containskey(op.id) && op.Program_EI__r.Processing_Workflow_EI__c!='Repair and Replacement'){
+                        for(OpportunityLineItem ol:optyoptylineMap.get(op.id)){
+                            if(ol.product2.ESA_Infiltration__c==true && !projectMeasureStatusSet.contains(ol.Project_Measure_Status_EI__c)){
+                                op.ESA_SubCon_NGAT_Required_EI__c=true;
+                                break;
+                            }
+                            else 
+                                op.ESA_SubCon_NGAT_Required_EI__c=false;
+                        }
+                        updateopty.add(op);
+                    }
+                    
+                }
+                update updateopty;*/
             }
         } catch(Exception e) {
             EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_OpportunityLineItemTriggerHandler', e));
@@ -442,7 +511,39 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
         // Allow deletion only for System Administrator profile -- START (STY-00933)
         AP_EI_ProjectMeasureUtils.checkDeletionForSysAdmin(oldMap);
         // Allow deletion only for System Administrator profile -- END (STY-00933)
+        
+        //Added By Sambit on 7/19/2017 for STY-1107
+        /*system.debug('##oldMap '+oldMap);
+        Map<Id, OpportunityLineItem> oldMapEsa=new Map<Id, OpportunityLineItem>();
+        for(OpportunityLineItem ol:oldMap.values()){
+            system.debug('##RC '+ol.opportunity.recordtypeid);
+            if(recordtypesetESA.contains(ol.opportunity.recordtype.name)){
+                oldMapEsa.put(ol.id,ol);
+            }
+        }
+        system.debug('##oldMapEsa '+oldMapEsa);*/
+        checkNGATReq(oldMap);
+        Map<Id, OpportunityLineItem> haveEsapMap=new Map<Id, OpportunityLineItem>([Select id,opportunityid,product2.ESA_ESAP_Measure_Category_EI__c from OpportunityLineItem where product2.ESA_ESAP_Measure_Category_EI__c!=null and id IN:oldMap.keyset()]);
+        
+        if(haveEsapMap.size()>0)
+            deleteEsapMeasure(haveEsapMap);
     }
+    
+    /**
+    * @Description: After Delete Trigger Handler
+    * @Parameter: Map<Id, Opportunity> oldMap
+    * @Return: void
+    * @Usage: This method is called from Opportunity Line Item Trigger, on before delete.
+    **/ 
+    /*public static void handleAfterDelete(Map<Id, OpportunityLineItem> oldMap) {
+        
+        system.debug('inside handleAfterDelete');
+        Map<Id, OpportunityLineItem> haveEsapMap=new Map<Id, OpportunityLineItem>([Select id,opportunityid,product2.ESA_ESAP_Measure_Category_EI__c from OpportunityLineItem where product2.ESA_ESAP_Measure_Category_EI__c!=null and id IN:oldMap.keyset()]);
+        
+        if(haveEsapMap.size()>0)
+            deleteEsapMeasure(haveEsapMap);
+        
+    }*/
     
     
     /**
@@ -986,5 +1087,71 @@ public without sharing class AP_EI_OpportunityLineItemTriggerHandler {
         } catch(Exception e) {
             EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_OpportunityLineItemTriggerHandler', e));
         }
-    }    
+    }  
+    
+    //added by sambit on 7/19/2017 for STY-1107
+    public static void checkNGATReq(Map<Id, OpportunityLineItem> oldMap) {   
+        
+        set<id> opptyidset=new set<id>();
+        list<opportunity> updateopty=new list<opportunity>();
+        map<id,list<OpportunityLineItem>> optyoptylineMap=new map<id,list<OpportunityLineItem>>();
+        for(OpportunityLineItem oli:oldMap.values()){
+            opptyidset.add(oli.opportunityid);
+        }
+        list<opportunity> opplist=new list<opportunity>([Select id,ESA_SubCon_NGAT_Required_EI__c,Program_EI__r.Processing_Workflow_EI__c,(select id,product2.ESA_Infiltration__c,Project_Measure_Status_EI__c from OpportunityLineItems) from opportunity where id IN:opptyidset]);
+        system.debug('opplist is '+opplist);
+        for(opportunity op:opplist){
+            for(OpportunityLineItem ol:op.OpportunityLineItems){
+                if(!oldMap.keyset().contains(ol.id)){
+                    if(!optyoptylineMap.containskey(op.id))
+                        optyoptylineMap.put(op.id,new list<OpportunityLineItem>{ol});
+                    else
+                        optyoptylineMap.get(op.id).add(ol);
+                }
+            }
+        }
+        system.debug('optyoptylineMap is '+optyoptylineMap);    
+        for(opportunity op:opplist)
+        {
+            if(optyoptylineMap.containskey(op.id) && op.Program_EI__r.Processing_Workflow_EI__c!='Repair and Replacement'){
+                for(OpportunityLineItem ol:optyoptylineMap.get(op.id)){
+                    if(ol.product2.ESA_Infiltration__c==true && !projectMeasureStatusSet.contains(ol.Project_Measure_Status_EI__c)){
+                        op.ESA_SubCon_NGAT_Required_EI__c=true;
+                        break;
+                    }
+                    else 
+                        op.ESA_SubCon_NGAT_Required_EI__c=false;
+                }
+                updateopty.add(op);
+            }
+            
+        }
+        update updateopty;  
+    }  
+    
+    //added by sambit on 7/19/2017 for STY-1107
+    public static void deleteEsapMeasure(Map<Id, OpportunityLineItem> esapMap) { 
+        
+        System.debug('inside after delete');
+        set<id> opptyidset=new set<id>();
+        integer count;
+        set<string> esapid=new set<string>();
+        list<OpportunityLineItem> toDelete=new list<OpportunityLineItem>();
+        for(OpportunityLineItem ol:esapMap.values()){
+            esapid.add(ol.product2.ESA_ESAP_Measure_Category_EI__c);
+            opptyidset.add(ol.opportunityid);
+        }
+        System.debug('##opptyidset '+opptyidset);
+        count=0;
+        for(OpportunityLineItem ol:[Select id,product2.ESA_ESAP_Measure_Category_EI__c from OpportunityLineItem where opportunityid IN:opptyidset]){
+            if(esapid.contains(ol.product2.ESA_ESAP_Measure_Category_EI__c))
+                count++;
+        }
+        System.debug('##count '+count);
+        if(count==1){
+            toDelete=[Select id from OpportunityLineItem where product2.id=:esapid];
+            delete toDelete;
+        }
+    }
+    
 }
