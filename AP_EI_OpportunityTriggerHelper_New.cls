@@ -34,6 +34,12 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
     public static Set<String> excludeMatchingLogicStatusSet = new Set<String>{'Rejected', 'Withdrawn'};
     public static Set<String> progSuppType = new Set<String>{'Distributor Program', '3P', 'GP'};
     public static Set<String> progProcessWF = new Set<String>{'Deemed', 'Custom Lite'};
+    public static final Set<String> recordtypesetESA = new Set<String> {'ESA A/C Tune Up', 'ESA A/C Tune Up Locked','ESA Application','ESA Large Appliance','ESA R&R','ESA R&R Locked','ESA Refrigerator Leveraging','  ESA Refrigerator Leveraging Locked','ESA Weatherization','ESA Weatherization Locked'};
+    public static final Set<String> recordTypeNameSetESA = new Set<String> { 'ESA_AC_Tune_Up','ESA_A_C_Tune_Up_Locked','PGE_ESA_Application_Parent_EI','ESA_large_Appliance','ESA_R_R','ESA_R_R_Locked','ESA_Refrigerator_Leveraging','ESA_Refrigerator_Leveraging_Locked','ESA_Weatherization','ESA_Weatherization_Locked'};
+    public static final String recordTypeESARefLev = 'ESA_Refrigerator_Leveraging';
+    public static List<Opportunity> oppList= new List<Opportunity>();
+    static List<Opportunity> oppSAIdList= new List<Opportunity>();
+    static final String ESA_REF_LEV_CUST_QUAL_REVIEW = 'Awaiting Qualification Review';
  
     
     public static User u {
@@ -81,6 +87,9 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
     public static final String PROJECT_NO_DD_STATUS = 'No Double Dip Found';
     public static final String DD_YES = 'Yes';
     public static final String DD_NO = 'No';
+    public static final String ESA_STAGE_PAID = 'Paid';
+    public static final String SYS_STATUS_RESOLVED = 'Resolved';
+    public static final String SYS_STATUS_VALIDATED = 'Validated';
     
     /**
     * @Description: Before Insert trigger handler
@@ -115,7 +124,7 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
                     
                     // Checking Opportunities created from Single Point Entry
                     for(Opportunity proj : opportunityList) {
-                        if(!isTradeProWizard && !isLeadConversion && rtMap.get(proj.RecordTypeId).DeveloperName <> SALES_OPP_RECORDTYPE) {
+                        if(!isTradeProWizard && !isLeadConversion && rtMap.get(proj.RecordTypeId).DeveloperName <> SALES_OPP_RECORDTYPE && rtMap.get(proj.RecordTypeId).DeveloperName <> 'PGE_ESA_Application_Parent_EI') {
                             singleEntryProjects.add(proj);
                         }
                     }
@@ -127,15 +136,31 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
             }
             
             for(Opportunity project :opportunityList) {
+               //Close Date for ESA Opportunities should not be set to System date
+               if (!(recordTypeNameSetESA.contains(rtMap.get(project.RecordTypeId).DeveloperName)))
+                  project.closeDAte= System.Today();
                 if(project.Program_EI__c != null) {
                     programIdSet.add(project.Program_EI__c); 
                 }
+                
+                //Creating Opportunity list to update Electric or GAS SAs or Premise lookup based on SAIds
+               if( rtMap.get(project.RecordTypeId).DeveloperName == recordTypeESARefLev  && 
+               ((project.Electric_SA_ID_EI__c != '' && project.Electric_SA_ID_EI__c != null) || 
+                (project.Gas_SA_ID_EI__c != '' && project.Gas_SA_ID_EI__c != null) )){
+                   System.debug('project SAId='+ project.Electric_SA_ID_EI__c);
+                   oppSAIdList.add(project); 
+               }
             }
             
             if(programIdSet.size() > 0) {
                programMap = new Map<Id, EI_Program__c>([SELECT Id, Is_Double_Dip_Skip_Eligible_EI__c, Pgm_Code_EI__c, OwnerId FROM EI_Program__c WHERE Id IN: programIdSet LIMIT 50000]);
             }
             
+            //update Electric or GAS SAs or Premise lookup based on SAIds
+            if (oppSAIdList.size()>0){
+                ESAProjectUtility.PopulateElectricGasSA(oppSAIdList);
+            }
+
             for(Opportunity projRec : opportunityList) {
                 if(projRec.Program_EI__c <> null) {
                     if(!programOwnerIdMap.containsKey(projRec.Program_EI__c)) {
@@ -170,6 +195,7 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
             
         }
         catch(Exception e) {
+     ESAProjectUtility.insertHousingBuildingTypeChildWF(opportunityList);
             EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_OpportunityTriggerHelper', e));
         }
     }
@@ -194,6 +220,8 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
          Map<Id, Opportunity> oppattachCheckMap = new Map<Id, Opportunity>();
          Map<Id, Opportunity> pirOppIdMap = new Map<Id, Opportunity>();
          Map<Id, List<OpportunityLineItem>> passedProjPMMap = new Map<Id, List<OpportunityLineItem>>();
+         Map<id,opportunity> ESAMap1=new Map<id,opportunity>();
+         Map<id,opportunity> ESAMap2=new Map<id,opportunity>();
         
         
          try {
@@ -249,6 +277,34 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
                 if(opp.StageName == OPPTY_CONVERTED && oldMap.get(opp.Id).StageName == SALES_OPPTY_STAGENAME) {
                     progManagerOnProj.add(opp); 
                 }
+                
+                if (((opp.E_IM_Data_Entry_Complete_EI__c != oldMap.get(opp.Id).E_IM_Data_Entry_Complete_EI__c && opp.E_IM_Data_Entry_Complete_EI__c == true) ||
+                   (opp.System_Validation_Status_EI__c != oldMap.get(opp.Id).System_Validation_Status_EI__c && opp.System_Validation_Status_EI__c == SYS_STATUS_RESOLVED ))
+                   && recordTypeNameSetESA.contains(rtMap.get(opp.RecordTypeId).DeveloperName)){
+                        system.debug('M inside if ESAMap1');
+                    ESAMap1.put(opp.id,opp);
+                }
+                
+                if (((opp.System_Validation_Status_EI__c != oldMap.get(opp.Id).System_Validation_Status_EI__c && opp.System_Validation_Status_EI__c == SYS_STATUS_VALIDATED ))
+                && recordTypeNameSetESA.contains(rtMap.get(opp.RecordTypeId).DeveloperName)){
+                        system.debug('M inside if ESAMap2');
+                    ESAMap2.put(opp.id,opp);
+                }
+                 //Creating Opportunity list with stage name as paid
+               if(opp.StageName != oldMap.get(opp.id).StageName && opp.StageName == ESA_STAGE_PAID
+               && recordTypeNameSetESA.contains(rtMap.get(opp.RecordTypeId).DeveloperName)){
+                  oppList.add(opp); 
+               }
+               
+               //Creating Opportunity list to update Electric or GAS SAs or Premise lookup based on SAIds
+               if( rtMap.get(opp.RecordTypeId).DeveloperName == recordTypeESARefLev  && 
+               ((opp.Electric_SA_ID_EI__c!= oldMap.get(opp.id).Electric_SA_ID_EI__c && (opp.Electric_SA_ID_EI__c != '' && opp.Electric_SA_ID_EI__c != null)) || 
+                (opp.Gas_SA_ID_EI__c!= oldMap.get(opp.id).Gas_SA_ID_EI__c && (opp.Gas_SA_ID_EI__c != '' && opp.Gas_SA_ID_EI__c != null) ))){
+                   oppSAIdList.add(opp); 
+               }
+
+               
+
             }
             
             // If the logged in user is a partner user and if it is a sales opportunity then do a check for VPE, if the user is populating/changing the program.
@@ -280,9 +336,81 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
             // Check for Project Team security feature for all Projects -- START (STY-00932)
             AP_EI_ProjectSecurityClass.checkProjectTeamRole(oldMap, newMap);
             // Check for Project Team security feature for all Projects -- END (STY-00932)
-        }
+            
+            //update Electric or GAS SAs or Premise lookup based on SAIds
+            if (oppSAIdList.size()>0){
+                ESAProjectUtility.PopulateElectricGasSA(oppSAIdList);
+            }
+            set<id> opptyidset=new set<id>();
+            list<OpportunityLineItem> updateoptyLine=new list<OpportunityLineItem>();
+            map<id,list<OpportunityLineItem>> optyoptylineMap=new map<id,list<OpportunityLineItem>>();
+            Map<Id, Opportunity> opportunityMap=new Map<Id, Opportunity>();
+            List<OpportunityLineItem> oliList=new List<OpportunityLineItem>();
+            if(ESAMap1.size()>0){
+                for(Opportunity op:ESAMap1.values()){
+                    opptyidset.add(op.id);
+                }
+                if(opptyidset.size()>0){
+                list<opportunity> opplist=new list<opportunity>([Select id,EI_Premise__c,Electric_SA_EI__c,(select id,Double_Dip_Status_EI__c,product2.PG_E_Product_EI__c from OpportunityLineItems) from opportunity where id IN:opptyidset]);
+                for(opportunity op:opplist){
+                    optyoptylineMap.put(op.id,new list<OpportunityLineItem>(op.OpportunityLineItems));
+                }
+                system.debug('optyoptylineMap is '+optyoptylineMap);
+                ESAProjectUtility.DetermineESAmeasure(optyoptylineMap,newMap);
+                
+                for(Opportunity opp: newMap.values()){
+                   if (newMap.get(opp.id).System_Validation_Status_EI__c=='Validated')
+                   ESAMap2.put(opp.id,opp);
+                }
+                
+                }
+            }
+            
+            if(ESAMap2.size()>0){
+                for(Opportunity op:ESAMap2.values()){
+                        opptyidset.add(op.id);
+                        system.debug('M inside if Validated');
+                }
+                if(opptyidset.size()>0){
+                    list<opportunity> opplist=new list<opportunity>([Select id,EI_Premise__c,Electric_SA_EI__c,(select id,Double_Dip_Status_EI__c,product2.PG_E_Product_EI__c,Double_Dip_Rvw_Status_EI__c from OpportunityLineItems) from opportunity where id IN:opptyidset]);
+                    for(opportunity op:opplist){
+                        optyoptylineMap.put(op.id,new list<OpportunityLineItem>(op.OpportunityLineItems));
+                    }
+                    system.debug('optyoptylineMap is '+optyoptylineMap);
+                    ESAProjectUtility.DetermineESADoubleDip(optyoptylineMap,newMap);
+                    ESAProjectUtility.ValidateESACapping(optyoptylineMap,newMap);
+                }
+               
+
+            }
+             
+         
+ //Deepika Added 8/7/2017
+  if(oppList.size()>0){
+  //Calling function to update Retreatment Classification on Parent Opportunity
+               ESAProjectUtility.updateRetreamentClassification3(oppList) ;
+     }
+     oppList.clear();
+// List<Opportunity> opplst = new List<Opportunity>();
+for(Opportunity opp : newMap.Values())
+{
+if(recordTypeNameSetESA.contains(rtMap.get(opp.RecordTypeId).DeveloperName))
+oppList.add(opp);
+}
+if(oppList.size()>0)
+{
+//function to add Opportunity Team Member
+ESAProjectUtility.insertOppTeamMember(oppList);
+//Function to add Vintage Year and Property Occupied By from Parent to child opportunity
+ESAProjectUtility.getParentFieldsChildWF(oldMap,newMap) ;
+//Function to update Building Type on Parent and Child Opty based on the Housing Type
+ESAProjectUtility.updateHousingBuildingTypeChildWF(oppList);
+}//if Close
+}//try Close
+        
         catch(Exception e) {
             EI_CreateErrorLog.upsertException(EI_CreateErrorLog.logException('AP_EI_OpportunityTriggerHelper', e));
+            
         }
     }
      
@@ -316,6 +444,8 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
         Map<Id, Opportunity> oppMap = new Map<Id, Opportunity>();
         Map<Id, OpportunityLineItem> oliUpdateMap = new Map<Id, OpportunityLineItem>();
         
+        Map<id,opportunity> ESAMap1=new Map<id,opportunity>();
+        Map<id,opportunity> ESAMap2=new Map<id,opportunity>();
         try {
             
             oppMap = new Map<Id, Opportunity>([SELECT Id, StageName, Double_Dip_Status_EI__c, Post_Install_Review_Complete_EI__c,
@@ -375,7 +505,19 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
                    ((rtMap.get(opp.RecordTypeId).DeveloperName == CUSTOM_APP_PROCESS || rtMap.get(opp.RecordTypeId).DeveloperName == CUSTOM_THIRD_PARTY || rtMap.get(opp.RecordTypeId).DeveloperName == 'Custom_Project_Locked') && ((opp.StageName == '7C - QC Review - C' && oldMap.get(opp.Id).StageName == '7B - Project Development - C') || (opp.StageName == POST_INSTALL_REVIEW && (oldMap.get(opp.Id).StageName == '8E - Post Install Tech Review' || oldMap.get(opp.Id).StageName == '13B - ED Post-Review - C'))))) {  
                     oppDDIdSet.add(opp.Id);
                 }
+                
+                if(rtMap.get(opp.RecordTypeId).DeveloperName == recordTypeESARefLev  && 
+                   oldMap.get(opp.Id).StageName!=opp.StageName && opp.StageName == ESA_REF_LEV_CUST_QUAL_REVIEW ) {
+                    progManagerAsOTM.add(opp); 
+                    System.debug('progManagerAsOTM=' + progManagerAsOTM);
+                }
+
+
             }
+            
+            
+
+          
             
             /** Adding Program Manager to Opportunity- START**/
             if(progManagerAsOTM.size() > 0) {
@@ -839,7 +981,7 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
             // Iterate over the opportunities to create a map of program codes and their salesforce id's.
             Set<String> programCodeSet = new Set<String>();
             for(Opportunity opp :opptyList) {
-                if(opp.Program_Code_EI__c != null && !''.equals(opp.Program_Code_EI__c)) {
+                if(opp.Program_Code_EI__c != null && !''.equals(opp.Program_Code_EI__c) && opp.recordtype.name !='PGE_ESA_Application_Parent_EI') {
                     programCodeSet.add(opp.Program_Code_EI__c);
                 }
             }
@@ -989,6 +1131,11 @@ public with sharing class AP_EI_OpportunityTriggerHelper {
         
         // Method to create Program Owner related to Project as Opportunity Team member under project
         AP_EI_ProjectUtils.addProgramManagerAsOTM(newProjects);
+        //Deepika Added 8/8/2017
+        //Method to add opportunity Team Member
+        system.debug('new proj'+newProjects);
+       ESAProjectUtility.insertOppTeamMember(newProjects);
+       
     }      
     
    /**
